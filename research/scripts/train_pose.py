@@ -9,7 +9,33 @@ import re
 
 from dataset import build_chunked_loaders
 
+EDGES = [(11,12),(11,23),(12,24),(23,24),  # torso
+         (23,25),(25,27),(24,26),(26,28),   # legs
+         (11,13),(13,15),(12,14),(14,16)]   # arms
 
+class SkeletonGNN(nn.Module):
+    def __init__(self, num_joints=33, feat_dim=64):
+        super().__init__()
+        # Build adjacency list
+        self.neighbors = {i: [i] for i in range(num_joints)}  # self-loops
+        for a, b in EDGES:
+            self.neighbors[a].append(b)
+            self.neighbors[b].append(a)
+        
+        self.msg = nn.Linear(feat_dim, feat_dim)
+        self.update = nn.GRUCell(feat_dim, feat_dim)
+
+    def forward(self, joint_feats):
+        # joint_feats: (B, J, feat_dim)
+        B, J, D = joint_feats.shape
+        out = joint_feats.clone()
+        for j in range(J):
+            neighbors = self.neighbors[j]
+            msgs = self.msg(joint_feats[:, neighbors, :]).mean(1)  # (B, D)
+            out[:, j, :] = self.update(msgs, joint_feats[:, j, :])
+        return out
+    
+    
 class PoseCNN(nn.Module):
     def __init__(self, num_keypoints=33):
         super().__init__()
@@ -31,39 +57,88 @@ class PoseCNN(nn.Module):
             nn.BatchNorm2d(256),
         )
 
-        self.decoder = nn.Sequential(
+        # Produce a rich feature map (not collapsed to heatmaps yet)
+        self.pre_heatmap = nn.Sequential(
             nn.ConvTranspose2d(256, 128, 2, stride=2),
             nn.ReLU(),
             nn.ConvTranspose2d(128, 64, 2, stride=2),
             nn.ReLU(),
-            nn.Conv2d(64, num_keypoints, 1),
-            nn.Sigmoid()
-        )
+        )  # output: (B, 64, 64, 64)
 
-        # Visibility head: pool encoder features → per-joint score
+        # Initial per-joint heatmap prediction (before GNN refinement)
+        self.initial_heatmap_head = nn.Conv2d(64, num_keypoints, 1)
+
+        # Per-joint feature extractor: pool a small region around each joint
+        self.joint_feat_dim = 64
+        self.joint_feat_proj = nn.Linear(64, self.joint_feat_dim)
+
+        # GNN refinement
+        self.gnn = SkeletonGNN(num_joints=num_keypoints, feat_dim=self.joint_feat_dim)
+
+        # Final heatmap refinement after GNN
+        self.refine_head = nn.Conv2d(num_keypoints, num_keypoints, 3, padding=1)
+
+        # Visibility head (unchanged)
         self.visibility_head = nn.Sequential(
-            nn.AdaptiveAvgPool2d((4, 4)),        # (B, 256, 4, 4)
-            nn.Flatten(),                         # (B, 256*16)
+            nn.AdaptiveAvgPool2d((4, 4)),
+            nn.Flatten(),
             nn.Linear(256 * 16, 256),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(256, num_keypoints),
-            nn.Sigmoid()                          # (B, J) in [0, 1]
+            nn.Sigmoid()
         )
 
     def forward(self, x):
-        enc = self.encoder(x)
-        heatmaps = self.decoder(enc)
-        vis_pred = self.visibility_head(enc)     # (B, J)
-        return heatmaps, vis_pred
-  
+        enc = self.encoder(x)                          # (B, 256, 16, 16)
+        feat_map = self.pre_heatmap(enc)               # (B, 64, 64, 64)
+
+        # Initial heatmaps
+        init_heatmaps = torch.sigmoid(
+            self.initial_heatmap_head(feat_map)
+        )                                              # (B, J, 64, 64)
+
+        # Extract per-joint features by sampling feat_map
+        # at each joint's predicted location (soft-argmax)
+        B, J, H, W = init_heatmaps.shape
+        h_idx = torch.linspace(0, 1, H, device=x.device)
+        w_idx = torch.linspace(0, 1, W, device=x.device)
+        sm = F.softmax(init_heatmaps.view(B, J, -1) / 0.1, dim=-1).view(B, J, H, W)
+        pred_x = (sm.sum(-2) * w_idx).sum(-1)         # (B, J)
+        pred_y = (sm.sum(-1) * h_idx).sum(-1)         # (B, J)
+
+        # Sample feat_map at predicted joint locations using grid_sample
+        # grid_sample expects coords in [-1, 1]
+        grid_x = pred_x * 2 - 1                       # (B, J)
+        grid_y = pred_y * 2 - 1
+        grid = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(2)  # (B, J, 1, 2)
+        # feat_map: (B, 64, 64, 64) — sample for each joint
+        joint_feats = F.grid_sample(
+            feat_map, grid, align_corners=True
+        ).squeeze(-1).permute(0, 2, 1)               # (B, J, 64)
+
+        joint_feats = self.joint_feat_proj(joint_feats)  # (B, J, feat_dim)
+
+        # GNN refinement — joints now talk to anatomical neighbors
+        refined_feats = self.gnn(joint_feats)            # (B, J, feat_dim)
+
+        # Use refined features to adjust heatmaps
+        # Project back: each joint's refined feature biases its heatmap channel
+        refined_bias = refined_feats.mean(-1).unsqueeze(-1).unsqueeze(-1)  # (B, J, 1, 1)
+        refined_heatmaps = torch.sigmoid(
+            self.refine_head(init_heatmaps) + refined_bias
+        )                                                # (B, J, 64, 64)
+
+        vis_pred = self.visibility_head(enc)             # (B, J)
+
+        return refined_heatmaps, vis_pred
   
    # Joint weights — emphasize torso joints
 JOINT_WEIGHTS = torch.ones(33)
-JOINT_WEIGHTS[11] = 3.0  # left shoulder
-JOINT_WEIGHTS[12] = 3.0  # right shoulder
-JOINT_WEIGHTS[23] = 3.0  # left hip
-JOINT_WEIGHTS[24] = 3.0  # right hip
+# Left Arm
+JOINT_WEIGHTS[12] = 3.0  # left shoulder
+JOINT_WEIGHTS[14] = 3.0  # right shoulder
+JOINT_WEIGHTS[16] = 3.0  # left hip
 
 # Bone connections for structural loss
 BONES = [
@@ -244,9 +319,21 @@ def train_pose(
 
     if resume_path:
         checkpoint = torch.load(resume_path, map_location=device)
-        model.load_state_dict(checkpoint["model_state_dict"])
+        missing_keys, unexpected_keys = model.load_state_dict(
+            checkpoint["model_state_dict"],
+            strict=False,
+        )
+        print(f"Missing keys when loading checkpoint: {missing_keys}")
+        print(f"Unexpected keys when loading checkpoint: {unexpected_keys}")
         if "optimizer_state_dict" in checkpoint:
-            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            try:
+                optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            except ValueError as exc:
+                print(
+                    "Optimizer state is incompatible with current model parameters; "
+                    "starting with a fresh optimizer state."
+                )
+                print(f"Optimizer load warning: {exc}")
 
         # Prefer the epoch stored in checkpoint; fallback to parsing from filename.
         start_epoch = int(checkpoint.get("epoch", 0))
