@@ -25,13 +25,18 @@ class SkeletonGNN(nn.Module):
         self.msg = nn.Linear(feat_dim, feat_dim)
         self.update = nn.GRUCell(feat_dim, feat_dim)
 
-    def forward(self, joint_feats):
-        # joint_feats: (B, J, feat_dim)
+    def forward(self, joint_feats, visibility=None):
+        # visibility: (B, J) — 0/1 or soft confidence
         B, J, D = joint_feats.shape
         out = joint_feats.clone()
         for j in range(J):
             neighbors = self.neighbors[j]
-            msgs = self.msg(joint_feats[:, neighbors, :]).mean(1)  # (B, D)
+            neighbor_feats = joint_feats[:, neighbors, :]  # (B, N, D)
+            if visibility is not None:
+                # mask out invisible neighbor contributions
+                vis_weights = visibility[:, neighbors].unsqueeze(-1)  # (B, N, 1)
+                neighbor_feats = neighbor_feats * vis_weights
+            msgs = self.msg(neighbor_feats).mean(1)
             out[:, j, :] = self.update(msgs, joint_feats[:, j, :])
         return out
     
