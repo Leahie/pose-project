@@ -11,6 +11,7 @@ router = APIRouter(prefix="/poses", tags=["poses"])
 
 @router.post("/create", response_model=PoseResponse)
 async def create_pose(pose: PoseCreate) -> PoseResponse:
+    
 	raise HTTPException(status_code=501, detail="Not implemented")
 
 

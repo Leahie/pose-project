@@ -3,9 +3,10 @@ from backend.app.schemas.dataset import DatasetCreate, DatasetUpdate, DatasetRes
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
+
 @router.post("/create", response_model=DatasetResponse)
 async def create_dataset(dataset: DatasetCreate):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    
 
 @router.patch("/update/{dataset_id}", response_model=DatasetResponse)
 async def update_dataset(dataset_id: str, dataset: DatasetUpdate):
