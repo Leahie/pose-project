@@ -21,11 +21,6 @@ class DatasetUpdate(BaseModel):
     creator_id: Optional[str]
     storage: Optional[StorageType]
     
-class DatasetRead(DatasetCreate):
-    id: str
-
-class DatasetDelete(BaseModel):
-    id: str
 
 class DatasetResponse(BaseModel):
     id: str

@@ -10,11 +10,6 @@ class ProjectUpdate(BaseModel):
     name: Optional[str]
     pose_ids: Optional[List[str]]
 
-class ProjectRead(ProjectCreate):
-    id: str
-
-class ProjectDelete(BaseModel):
-    id: str
 
 class ProjectResponse(BaseModel):
     id: str

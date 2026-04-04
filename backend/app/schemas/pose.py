@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Dict
+from typing import List, Dict, Optional
 from app.utils.enums import StorageType
 
 
@@ -23,6 +23,12 @@ class PoseCreate(BaseModel):
     image_url: str | None = None
     storage: StorageType
 
+class PoseUpdate(BaseModel):
+    metadata: Optional[PoseMetadata] = None
+    embedding: Optional[PoseEmbedding] = None
+    image_url: Optional[str] = None
+    storage: Optional[StorageType] = None
 
+    
 class PoseResponse(PoseCreate):
     id: str
