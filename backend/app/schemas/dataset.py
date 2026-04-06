@@ -3,7 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel
 from typing import List, Optional
 
-from backend.app.utils.enums import StorageType
+from app.utils.enums import StorageType
 
 """Schema for creating a new dataset. Working model, all created datasets will be temporary, only modifies a database if it is committed. """
 

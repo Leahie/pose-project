@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from backend.app.schemas.dataset import DatasetCreate, DatasetUpdate, DatasetResponse
+from app.schemas.dataset import DatasetCreate, DatasetUpdate, DatasetResponse
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 

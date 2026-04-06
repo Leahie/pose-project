@@ -1,6 +1,6 @@
-from backend.app.core.config import settings
-from backend.app.schemas.dataset import DatasetResponse
-from backend.app.utils.enums import StorageType
+from app.core.config import settings
+from app.schemas.dataset import DatasetResponse
+from app.utils.enums import StorageType
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy import Column, String, DateTime, JSON
@@ -11,6 +11,11 @@ import redis.asyncio as aioredis
 # infra
 REDIS_URL = settings.REDIS_URL
 DATABASE_URL = settings.DATABASE_URL
+
+S3_BUCKET = settings.S3_BUCKET
+
+TEMP_PREFIX = "datasets/temp"
+PERM_PREFIX = "datasets/perm"
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)

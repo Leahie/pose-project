@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 
-from backend.app.schemas.pose import (
+from app.schemas.pose import (
 	PoseCreate,
 	PoseResponse,
 	PoseUpdate,

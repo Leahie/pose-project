@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 
-from backend.app.schemas.project import (
+from app.schemas.project import (
 	ProjectCreate,
 	ProjectResponse,
 	ProjectUpdate,
