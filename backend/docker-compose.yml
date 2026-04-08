@@ -1,53 +1,41 @@
 services:
-  api:
-    build: .
-    container_name: fastapi_app
-    ports:
-      - "8000:8000"
-    depends_on:
-      - redis
-      - db
-      - minio
-    environment:
-      - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgresql://user:password@db:5432/app_db
-      - S3_ENDPOINT=http://minio:9000
-      - S3_ACCESS_KEY=minioadmin
-      - S3_SECRET_KEY=minioadmin
-      - S3_BUCKET=mybucket
-
   redis:
-    image: redis:7
-    container_name: redis
+    image: redis:7-alpine
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --save 60 1
 
-  db:
-    image: postgres:15
-    container_name: postgres
-    restart: always
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
-      POSTGRES_DB: app_db
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: dbname
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
 
   minio:
-    image: minio/minio
-    container_name: minio
-    command: server /data --console-address ":9001"
+    image: minio/minio:latest
     ports:
-      - "9000:9000"   # API
-      - "9001:9001"   # UI
+      - "9000:9000"
+      - "9001:9001"   # web console → http://localhost:9001
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     volumes:
       - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
 volumes:
-  pgdata:
+  redis_data:
+  postgres_data:
   minio_data:

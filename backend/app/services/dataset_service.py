@@ -1,109 +1,219 @@
-from app.core.config import settings
-from app.schemas.dataset import DatasetResponse
-from app.utils.enums import StorageType
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy import Column, String, DateTime, JSON
-import io
+import uuid
+from datetime import datetime, timezone
+from typing import Optional
+ 
 import numpy as np
-import redis.asyncio as aioredis
-
-# infra
-REDIS_URL = settings.REDIS_URL
-DATABASE_URL = settings.DATABASE_URL
-
-S3_BUCKET = settings.S3_BUCKET
-
-TEMP_PREFIX = "datasets/temp"
-PERM_PREFIX = "datasets/perm"
-
-engine = create_async_engine(DATABASE_URL, echo=False)
-AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+from fastapi import HTTPException, UploadFile
  
-Base = declarative_base()
+from app.models.dataset import DatasetModel
+from app.repositories.dataset_repository import DatasetRepository
+from app.repositories.redis_repository import RedisRepository
+from app.repositories.s3_repository import S3Repository
+from app.schemas.dataset import DatasetResponse, DatasetUpdate
+from app.utils.enums import StorageType
+
+def _mediapipe(image_bytes: bytes) -> list[list[float]]:
+    """
+    Run MediaPipe Holistic on raw image bytes.
+    Returns a list of [x, y, z] landmarks, or [] if no pose is detected.
+    """
+    import cv2
+    import mediapipe as mp
+    
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    
+    with mp.solutions.holistic.Holistic(static_image_mode=True, model_complexity=2) as holistic:
+        results = holistic.process(image_rgb)
  
-# Namespace key used in Redis so dataset keys never collide with other data
-REDIS_NS = "dataset:"
+    if not results.pose_landmarks:
+        return []
+    return [[lm.x, lm.y, lm.z] for lm in results.pose_landmarks.landmark]
 
-# sql model 
-class DatasetModel(Base):
-    __tablename__ = "datasets"
-    
-    id = Column(String, primary_key=True, index=True)
-    name = Column(String, index=True)
-    date = Column(DateTime)
-    data = Column(JSON, nullable=False)          # stored as list[list[float]]
-    pose_ids = Column(JSON, nullable=False)      # stored as list[str]
-    creator_id = Column(String, nullable=True)
-    
-
-# helpers 
-def _ndarray_to_bytes(arr: np.ndarray) -> bytes:
-    buf = io.BytesIO()
-    np.save(buf, arr)
-    return buf.getvalue()
-
-def _bytes_to_ndarray(b: bytes) -> np.ndarray:
-    buf = io.BytesIO(b)
-    return np.load(buf, allow_pickle=True)
+def _to_response(meta: dict, storage: StorageType) -> DatasetResponse:
+    return DatasetResponse(
+        id=meta["id"],
+        name=meta.get("name", ""),
+        date=datetime.fromisoformat(meta["date"]),
+        pose_ids=meta.get("pose_ids", []),
+        image_keys=meta.get("image_keys", []),
+        creator_id=meta.get("creator_id"),
+        storage=storage,
+    )
 
 def _model_to_response(model: DatasetModel, storage: StorageType) -> DatasetResponse:
-    return {
-        "id": model.id,
-        "name": model.name or "",
-        "date": model.date,
-        "pose_ids": model.pose_ids,
-        "creator_id": model.creator_id or None,
-        "storage": storage.value
-    }
+    return DatasetResponse(
+        id=model.id,
+        name=model.name or "",
+        date=model.date,
+        pose_ids=model.pose_ids,
+        image_keys=model.image_keys,
+        creator_id=model.creator_id,
+        storage=storage,
+    )
     
-# service 
 class DatasetService:
-    """
-    Thin service layer that owns all Redis ↔ SQL orchestration.
+    def __init__(
+        self, 
+        db_repo: DatasetRepository, 
+        redis_repo: RedisRepository, 
+        s3_repo: S3Repository
+    ): 
+        self.db = db_repo
+        self.cache = redis_repo
+        self.s3 = s3_repo
+    
+    async def create(
+        self, 
+        files: list[UploadFile], 
+        name: Optional[str], 
+        creator_id: Optional[str]
+    ) -> DatasetResponse: 
+        """
+        For each uploaded image:
+          1. Upload to S3 under datasets/temp/<id>/
+          2. Run MediaPipe → (N, 3) landmarks
+        Stack all landmarks into one numpy array and store in Redis.
+        Does NOT touch SQL.
+        """
+        dataset_id = str(uuid.uuid4())
+        pose_ids, image_keys, all_landmarks = [], [], []
+        
+        for file in files: 
+            image_bytes = await file.read()
+            filename = file.filename or f"{uuid.uuid4()}.jpg"
+            
+            key = await self.s3.upload_temp(dataset_id, filename, image_bytes, file.content_type or "image/jpeg")
+            image_keys.append(key)
+            
+            landmarks = _mediapipe(image_bytes)
+            all_landmarks.append(landmarks)
+            pose_ids.append(str(uuid.uuid4()))
+        
+        arr = np.array(all_landmarks, dtype=np.float64)
+        now = datetime.now(timezone.utc)
+        meta = {
+            "id": dataset_id,
+            "name": name or "",
+            "date": now.isoformat(),
+            "pose_ids": pose_ids,
+            "image_keys": image_keys,
+            "creator_id": creator_id,
+        }
+        await self.cache.set(dataset_id, arr, meta)
+        
+        return _to_response(meta, StorageType.TEMP)
+    
+    async def read(self, dataset_id: str) -> DatasetResponse:
+        """Read a committed dataset from SQL."""
+        model = await self.db.get(dataset_id)
+        if model is None:
+            raise HTTPException(status_code=404, detail="Dataset not found in database")
+        return _model_to_response(model, StorageType.PERMANENT)
+    
+    async def commit(self, dataset_id: str) -> DatasetResponse:
+        """
+        Flush Redis → SQL and promote S3 images from temp/ → permanent/.
+        Cleans up Redis only after a successful SQL write.
+        """
+        meta = await self.cache.get_meta(dataset_id)
+        arr = await self.cache.get_array(dataset_id)
+        if meta is None or arr is None:
+            raise HTTPException(status_code=404, detail="Dataset not found in Redis cache")
  
-    Redis key schema
-    ----------------
-    dataset:<id>:array   – numpy .npy bytes of the 3-D point cloud
-    dataset:<id>:meta    – JSON blob with name / date / pose_ids / creator_id
-    """
-    # helpers
-    async def _redis(self) -> aioredis.Redis:
-        return await aioredis.from_url(REDIS_URL)
-    
-    async def _get_session(self) -> AsyncSession:
-        return AsyncSessionLocal()
-    
-    # array is the numpy array. 
-    async def _redis_get_array(self, r: aioredis.Redis, dataset_id: str) -> Optional[np.ndarray]:
-        raw = await r.get(f"{REDIS_NS}{dataset_id}:array")
-        if raw is None:
-            return None
-        return _bytes_to_ndarray(raw)
-    
-    # meta is json blob with name / date / pose_ids / creator_id
-    async def _redis_get_meta(self, r: aioredis.Redis, dataset_id: str) -> Optional[dict]:
-        raw = await r.get(f"{REDIS_NS}{dataset_id}:meta")
-        if raw is None:
-            return None
-        return json.loads(raw)
-    
-    @staticmethod
-    async def create_dataset(dataset_create: DatasetCreate) -> DatasetResponse:
-        # Create a new dataset model instance
-        new_dataset = DatasetModel(
-            id=str(uuid.uuid4()),
-            name=dataset_create.name,
-            date=dataset_create.date,
-            data=dataset_create.data,  # Store as list of lists
-            pose_ids=dataset_create.pose_ids,
-            creator_id=dataset_create.creator_id
+        perm_keys = await self.s3.promote_to_permanent(meta["image_keys"], dataset_id)
+ 
+        model = DatasetModel(
+            id=dataset_id,
+            name=meta.get("name", ""),
+            date=datetime.fromisoformat(meta["date"]),
+            data=arr.tolist(),
+            pose_ids=meta.get("pose_ids", []),
+            image_keys=perm_keys,
+            creator_id=meta.get("creator_id"),
         )
+        model = await self.db.create(model)
+        await self.cache.delete(dataset_id)
+ 
+        return _model_to_response(model, StorageType.PERMANENT)
+
+    async def cache_dataset(self, dataset_id: str) -> DatasetResponse:
+        """
+        Pull a committed SQL dataset back into Redis as a numpy array.
+        Image keys remain under datasets/permanent/ – not moved back to temp.
+        """
+        model = await self.db.get(dataset_id)
+        if model is None:
+            raise HTTPException(status_code=404, detail="Dataset not found in database")
+ 
+        arr = np.array(model.data, dtype=np.float64)
+        meta = {
+            "id": model.id,
+            "name": model.name or "",
+            "date": model.date.isoformat(),
+            "pose_ids": model.pose_ids,
+            "image_keys": model.image_keys,
+            "creator_id": model.creator_id,
+        }
+        await self.cache.set(model.id, arr, meta)
+ 
+        return _model_to_response(model, StorageType.TEMPORARY)
+ 
+    async def update(self, dataset_id: str, payload: DatasetUpdate) -> DatasetResponse:
+        """
+        Patch metadata. Tries Redis first; falls back to SQL.
+        Only metadata fields are updated – the numpy array is unchanged.
+        """
+        meta = await self.cache.get_meta(dataset_id)
+        if meta:
+            updates = {}
+            if payload.name is not None:
+                updates["name"] = payload.name
+            if payload.date is not None:
+                updates["date"] = payload.date.isoformat()
+            if payload.pose_ids is not None:
+                updates["pose_ids"] = payload.pose_ids
+            if payload.creator_id is not None:
+                updates["creator_id"] = payload.creator_id
+            meta = await self.cache.update_meta(dataset_id, updates)
+            return _to_response(meta, StorageType.TEMPORARY)
+ 
+        model = await self.db.get(dataset_id)
+        if model is None:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+ 
+        model = await self.db.update(model, {
+            "name": payload.name,
+            "date": payload.date,
+            "pose_ids": payload.pose_ids,
+            "creator_id": payload.creator_id,
+        })
+        return _model_to_response(model, StorageType.PERMANENT)
+ 
+    async def delete(self, dataset_id: str) -> DatasetResponse:
+        """
+        Delete from Redis + temp S3 images if uncommitted.
+        Delete from SQL + permanent S3 images if committed.
+        Checks both stores so a re-cached dataset is fully cleaned up.
+        """
+        snapshot: Optional[DatasetResponse] = None
+ 
+        meta = await self.cache.get_meta(dataset_id)
+        if meta:
+            await self.s3.delete_many(meta.get("image_keys", []))
+            await self.cache.delete(dataset_id)
+            snapshot = _to_response(meta, StorageType.TEMPORARY)
+ 
+        model = await self.db.get(dataset_id)
+        if model:
+            await self.s3.delete_many(model.image_keys or [])
+            snapshot = _model_to_response(model, StorageType.PERMANENT)
+            await self.db.delete(model)
+ 
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+ 
+        return snapshot
+ 
         
-        # Save to database
-        async with AsyncSessionLocal() as session:
-            session.add(new_dataset)
-            await session.commit()
-            await session.refresh(new_dataset)
-        
-        return _model_to_response(new_dataset, StorageType.DATABASE)
