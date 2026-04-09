@@ -2,7 +2,7 @@ import boto3
 import os 
 
 s3 = boto3.client("s3")
-BUCKET = os.getenv("S3_BUCKET")
+BUCKET = os.getenv("S3_BUCKET").strip()
 
 def upload_to_s3(file_bytes, key): 
     s3.put_object(

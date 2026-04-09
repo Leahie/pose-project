@@ -3,7 +3,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
-from app.core.config import Settings
+from app.core.config import settings
 import boto3
 import redis.asyncio as aioredis
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -16,7 +16,7 @@ async def run_sync(fn, *args, **kwargs):
     return await loop.run_in_executor(_exectutor, partial(fn, *args, **kwargs))
 
 # PostgreSQL setup
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@localhost/dbname")
+DATABASE_URL = (os.getenv("DATABASE_URL") or settings.DATABASE_URL).strip()
 
 engine = create_async_engine(DATABASE_URL, echo=False)
 AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -26,7 +26,7 @@ async def get_db() -> AsyncSession:
         yield session
     
 # Redis setup
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379").strip()
 _redis_pool: aioredis.Redis | None = None
 def get_redis() -> aioredis.Redis:
     if _redis_pool is None:
@@ -44,7 +44,7 @@ async def close_redis():
         _redis_pool = None
         
 # S3 setup
-S3_BUCKET = Settings.S3_BUCKET
+S3_BUCKET = settings.S3_BUCKET
 _s3_client: boto3.client | None = None
 
 def get_s3() -> boto3.client:
@@ -52,9 +52,9 @@ def get_s3() -> boto3.client:
     if _s3_client is None:
         _s3_client = boto3.client(
             "s3",
-            endpoint_url=os.getenv("S3_ENDPOINT"),
-            aws_access_key_id=os.getenv("S3_ACCESS_KEY"),
-            aws_secret_access_key=os.getenv("S3_SECRET_KEY"),
+            endpoint_url=os.getenv("S3_ENDPOINT").strip(),
+            aws_access_key_id=os.getenv("S3_ACCESS_KEY").strip(),
+            aws_secret_access_key=os.getenv("S3_SECRET_KEY").strip(),
         )
     return _s3_client
 

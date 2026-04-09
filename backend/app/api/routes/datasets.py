@@ -3,12 +3,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
  
-from backend.app.core.infrastructure import get_db, get_redis, get_s3
-from backend.app.repositories.dataset_repository import DatasetRepository
-from backend.app.repositories.redis_repository import RedisRepository
-from backend.app.repositories.s3_repository import S3Repository
-from backend.app.schemas.dataset import DatasetResponse, DatasetUpdate
-from backend.app.services.dataset_service import DatasetService
+from app.core.infrastructure import get_db, get_redis, get_s3
+from app.repositories.dataset_repository import DatasetRepository
+from app.repositories.redis_repository import RedisRepository
+from app.repositories.s3_repository import S3Repository
+from app.schemas.dataset import DatasetResponse, DatasetUpdate
+from app.services.dataset_service import DatasetService
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 

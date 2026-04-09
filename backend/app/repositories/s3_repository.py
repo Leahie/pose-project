@@ -1,5 +1,5 @@
 import boto3
-from backend.app.core.infrastructure import S3_BUCKET, run_sync
+from app.core.infrastructure import S3_BUCKET, run_sync
 
 TEMP_PREFIX = "datasets/temp"
 PERM_PREFIX = "datasets/permanent"

@@ -1,7 +1,7 @@
 from sqlalchemy import select 
 from sqlalchemy.ext.asyncio import AsyncSession 
 
-from backend.app.models.dataset import DatasetModel
+from app.models.dataset import DatasetModel
 
 class DatasetRepository: 
     """Encapsulates all SQL operations for datasets. Receives a session via DI."""
