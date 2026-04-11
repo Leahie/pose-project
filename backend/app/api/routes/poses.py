@@ -8,6 +8,7 @@ from app.schemas.pose import (
 
 router = APIRouter(prefix="/poses", tags=["poses"])
 
+# Pose Inference File  
 
 @router.post("/create", response_model=PoseResponse)
 async def create_pose(pose: PoseCreate) -> PoseResponse:
