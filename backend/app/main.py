@@ -1,6 +1,10 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from contextlib import asynccontextmanager
  
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
  
 from app.api.router import api_router 
 from app.core.infrastructure import (
@@ -10,6 +14,22 @@ from app.core.infrastructure import (
     setup_minio,
 )
 from app.models.dataset import Base
+from fastapi.middleware.cors import CORSMiddleware
+
+
+# Structure 
+# app.state.store = {
+#     "poses": {
+#         "pose_id_1": {...},
+#         "pose_id_2": {...},
+#     },
+#     "datasets": {
+#         "dataset_id_1": {
+#             "poses": ["pose_id_1", "pose_id_2"],
+#             "metadata": {...}
+#         }
+#     }
+# }
 
 @asynccontextmanager
 async def lifespan(app:FastAPI):
@@ -24,5 +44,24 @@ async def lifespan(app:FastAPI):
     
     await close_redis()
     
+
+    
 app = FastAPI(lifespan=lifespan)
+
+
+app.state.store = {
+    "poses": {
+    },
+    "datasets": {
+    }
+}
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],  # Add your frontend URLs
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(api_router)
