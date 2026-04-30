@@ -1,9 +1,11 @@
-import { Canvas } from '@react-three/fiber'
+import { Canvas, useThree } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
-import { useMemo } from 'react'
+import { forwardRef, useImperativeHandle, useMemo } from 'react'
 import { SkeletonModel } from '../skeleton/SkeletonModel'
 import { JointMesh } from './JointMesh'
 import { BoneLine } from './BoneLine'
+import type { SkeletonCanvasRef } from '../../types'
+import * as THREE from 'three'
 
 const embedding: [number, number, number][] = [
   [0.5187111496925354, 0.3041764795780182, -1.088034749031067],
@@ -54,8 +56,13 @@ const edges: [number, number][] = [
   [27, 31], [31, 29], [29, 27],
 ]
 
-function Scene({model}: {model:SkeletonModel}){
-    const cx = model.joints.reduce((s, j) => s + j.position[0], 0) / model.joints.length
+interface SceneProps {
+  model: SkeletonModel;
+}
+
+const Scene = forwardRef<SkeletonCanvasRef, SceneProps>(({model}, ref) => {
+  const { camera } = useThree()  
+  const cx = model.joints.reduce((s, j) => s + j.position[0], 0) / model.joints.length
     const cy = model.joints.reduce((s, j) => s + j.position[1], 0) / model.joints.length
     const cz = model.joints.reduce((s, j) => s + j.position[2], 0) / model.joints.length
 
@@ -67,8 +74,19 @@ function Scene({model}: {model:SkeletonModel}){
         (j.position[2] - cz) * scale,
         ])
         return new SkeletonModel(centeredEmbedding, edges)
-    }, [])
+    }, [model, cx, cy, cz])
 
+    useImperativeHandle(ref, () => ({
+      getProjectedPoints: () => {
+          return centeredModel.joints.map(joint => {
+            const vec = new THREE.Vector3(...joint.position);
+            vec.project(camera);
+            return { x: vec.x, y: vec.y, z: vec.z };
+          })
+      } 
+    }) 
+
+    )
     return (
     <>
       {/* Lighting */}
@@ -88,18 +106,18 @@ function Scene({model}: {model:SkeletonModel}){
       ))}
     </>
   )
-}
+})
 
-export function SkeletonCanvas() {
+export const SkeletonCanvas = forwardRef<SkeletonCanvasRef>((props, ref) => {
   const model = useMemo(() => new SkeletonModel(embedding, edges), [])
 
   return (
     <div style={{ width: '100vw', height: '100vh', background: '#050810' }}>
       <Canvas camera={{ position: [0, 0, 3.5], fov: 55 }}>
-        <Scene model={model} />
+        <Scene model={model} ref={ref}/>
         <OrbitControls enableDamping dampingFactor={0.08} />
         <gridHelper args={[6, 20, '#0d2040', '#0a1828']} position={[0, -1.8, 0]} />
       </Canvas>
     </div>
   )
-}
+})
