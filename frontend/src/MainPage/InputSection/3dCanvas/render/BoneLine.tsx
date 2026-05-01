@@ -1,5 +1,5 @@
-import { useMemo } from "react";
 import * as THREE from 'three'
+import { useEffect, useRef } from 'react'
 import type { Bone } from "../skeleton/Bone";
 
 interface BoneLineProps {
@@ -7,18 +7,26 @@ interface BoneLineProps {
 }
 
 export function BoneLine({ bone }: BoneLineProps) {
-    const points = useMemo(() => {
-        const [sx, sy, sz] = bone.start.position
-        const [ex, ey, ez] = bone.end.position
-        return [new THREE.Vector3(sx, sy, sz), new THREE.Vector3(ex, ey, ez)]
-    }, [bone])
+    const [sx, sy, sz] = bone.start.position
+    const [ex, ey, ez] = bone.end.position
+    const array = new Float32Array([sx, sy, sz, ex, ey, ez])
+    const attrRef = useRef<THREE.BufferAttribute | null>(null)
+
+    useEffect(() => {
+      if (attrRef.current) {
+        // replace array reference and mark attribute for update
+        ;(attrRef.current as any).array = array
+        attrRef.current.needsUpdate = true
+      }
+    }, [sx, sy, sz, ex, ey, ez, array])
 
     return (
         <line>
         <bufferGeometry>
             <bufferAttribute
+            ref={attrRef}
             attach="attributes-position"
-            array={new Float32Array(points.flatMap(p => [p.x, p.y, p.z]))}
+            array={array}
             count={2}
             itemSize={3}
             />

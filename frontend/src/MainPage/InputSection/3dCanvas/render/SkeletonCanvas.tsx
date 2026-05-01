@@ -1,75 +1,59 @@
-import { Canvas, useThree } from '@react-three/fiber'
-import { OrbitControls } from '@react-three/drei'
-import { forwardRef, useImperativeHandle, useMemo } from 'react'
+import { Canvas } from '@react-three/fiber'
+import { forwardRef, useCallback, useMemo, useState } from 'react'
 import { SkeletonModel } from '../skeleton/SkeletonModel'
-import { JointMesh } from './JointMesh'
-import { BoneLine } from './BoneLine'
 import type { SkeletonCanvasRef } from '../../types'
-import * as THREE from 'three'
 import { edges, embedding } from '../data'
+import { useGizmo } from '../interaction/useGizmo'
+import { AxisPicker } from '../interaction/AxisPicker'
+import { Scene } from './SkeletonScene'
+import { css, classNames } from './SkeletonCanvas.styles'
 
-interface SceneProps {
-  model: SkeletonModel;
-}
-
-const Scene = forwardRef<SkeletonCanvasRef, SceneProps>(({model}, ref) => {
-  const { camera } = useThree()  
-  const cx = model.joints.reduce((s, j) => s + j.position[0], 0) / model.joints.length
-    const cy = model.joints.reduce((s, j) => s + j.position[1], 0) / model.joints.length
-    const cz = model.joints.reduce((s, j) => s + j.position[2], 0) / model.joints.length
-
-    const centeredModel = useMemo(() => {
-        const scale = 3
-        const centeredEmbedding: [number, number, number][] = model.joints.map(j => [
-        (j.position[0] - cx) * scale,
-        (j.position[1] - cy) * scale,
-        (j.position[2] - cz) * scale,
-        ])
-        return new SkeletonModel(centeredEmbedding, edges)
-    }, [model, cx, cy, cz])
-
-    useImperativeHandle(ref, () => ({
-      getProjectedPoints: () => {
-          return centeredModel.joints.map(joint => {
-            const vec = new THREE.Vector3(...joint.position);
-            vec.project(camera);
-            return { x: vec.x, y: vec.y, z: vec.z };
-          })
-      } 
-    }) 
-
-    )
-    return (
-    <>
-      {/* Lighting */}
-      <ambientLight intensity={1.5} />
-      <directionalLight position={[1, 2, 2]} intensity={3} color="#4af0c4" />
-      <directionalLight position={[-2, 1, -1]} intensity={1.5} color="#7eb8f7" />
-      <pointLight position={[0, -1, -2]} intensity={2} color="#1a4fff" distance={8} />
-
-      {/* Joints */}
-      {centeredModel.joints.map(joint => (
-        <JointMesh key={joint.id} joint={joint} />
-      ))}
-
-      {/* Bones */}
-      {centeredModel.bones.map((bone, i) => (
-        <BoneLine key={i} bone={bone} />
-      ))}
-    </>
-  )
-})
+// Scene has been moved to SkeletonScene.tsx and is imported above.
 
 export const SkeletonCanvas = forwardRef<SkeletonCanvasRef>((props, ref) => {
-  const model = useMemo(() => new SkeletonModel(embedding, edges), [])
+  const model = useMemo(() => {
+    // Center + scale the embedding.
+    const raw = embedding
+    const cx = raw.reduce((s, p) => s + p[0], 0) / raw.length
+    const cy = raw.reduce((s, p) => s + p[1], 0) / raw.length
+    const cz = raw.reduce((s, p) => s + p[2], 0) / raw.length
+    const scale = 3
+    const centered: [number, number, number][] = raw.map(p => [
+      (p[0] - cx) * scale,
+      (p[1] - cy) * scale,
+      (p[2] - cz) * scale,
+    ])
+    return new SkeletonModel(centered, edges)
+  }, [])
+
+  const [, setTick] = useState(0)
+  const forceUpdate = useCallback(() => setTick(t => t + 1), [])
+  
+  const gizmo = useGizmo()
+
 
   return (
-    <div style={{ width: '100vw', height: '100vh', background: '#050810' }}>
+    <div className={classNames.root}>
+      <style>{css}</style>
       <Canvas camera={{ position: [0, 0, 3.5], fov: 55 }}>
-        <Scene model={model} ref={ref}/>
-        <OrbitControls enableDamping dampingFactor={0.08} />
-        <gridHelper args={[6, 20, '#0d2040', '#0a1828']} position={[0, -1.8, 0]} />
+        <Scene model={model} ref={ref} onModelUpdate={forceUpdate} gizmo={gizmo} />
       </Canvas>
+
+      {/* Rotation axis picker overlay */}
+      <div className={classNames.overlay}>
+        <div className={classNames.overlayText}>
+          {gizmo.activeAxis
+            ? `Rotate ${gizmo.activeAxis.toUpperCase()} axis — drag a joint`
+            : 'Select an axis then drag a joint'}
+        </div>
+        <AxisPicker activeAxis={gizmo.activeAxis} setActiveAxis={gizmo.setActiveAxis} />
+        <button
+          onClick={() => { model.resetToBindPose(); forceUpdate() }}
+          className={classNames.button}
+        >
+          Reset pose
+        </button>
+      </div>
     </div>
   )
 })

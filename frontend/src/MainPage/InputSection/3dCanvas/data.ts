@@ -1,3 +1,5 @@
+import type { JointType } from "./skeleton/Joint"
+
 export const edges: [number, number][] = [
   [8, 7], [10, 9], [8, 10], [7, 9],
   [12, 11], [24, 23], [12, 24], [11, 23],
@@ -46,3 +48,37 @@ export const embedding: [number, number, number][] = [
   [0.5603018403053284, 1.254590392112732, 0.6862180233001709],
   [0.4158269762992859, 1.2475093603134155, 0.8138422966003418],
 ]
+
+export const JOINT_TYPES: Record<number, JointType> = {
+  // Head / face landmarks — fixed relative to each other
+  0: 'ball',  1: 'ball',  2: 'ball',  3: 'ball',
+  4: 'ball',  5: 'ball',  6: 'ball',
+ 
+  // Ears / eyes
+  7: 'fixed', 8: 'fixed', 9: 'fixed', 10: 'fixed',
+ 
+  // Shoulders — ball-and-socket
+  11: 'ball', 12: 'ball',
+ 
+  // Elbows — hinge
+  13: 'hinge', 14: 'hinge',
+ 
+  // Wrists — ball (limited)
+  15: 'ball',  16: 'ball',
+ 
+  // Finger tips — fixed
+  17: 'fixed', 18: 'fixed', 19: 'fixed', 20: 'fixed',
+  21: 'fixed', 22: 'fixed',
+ 
+  // Hips — ball-and-socket
+  23: 'ball', 24: 'ball',
+ 
+  // Knees — hinge
+  25: 'hinge', 26: 'hinge',
+ 
+  // Ankles — ball (limited)
+  27: 'ball',  28: 'ball',
+ 
+  // Foot landmarks — fixed
+  29: 'fixed', 30: 'fixed', 31: 'fixed', 32: 'fixed',
+}
